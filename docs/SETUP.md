@@ -1,15 +1,16 @@
-# Setup guide: Supabase, Google sign-in, Mailgun and Vercel
+# Setup guide: Supabase database, Google sign-in, Mailgun and Vercel
 
-Follow these steps in order. They take about 30–40 minutes. Keep a private notes file
-for the values you copy. **Never commit them or paste them in chat.**
+Follow these steps in order. They take about 30 minutes. Keep a private notes file for the
+values you copy. **Never commit them or paste them in chat.**
 
 You will end up with these values for `.env.local` (and for Vercel):
 
 | Variable | Where it comes from |
 | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → anon / publishable key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → service_role / secret key |
+| `DATABASE_URL` | Supabase → Connect → Transaction pooler connection string |
+| `GOOGLE_CLIENT_ID` | Google Cloud Console → OAuth client |
+| `GOOGLE_CLIENT_SECRET` | Google Cloud Console → OAuth client |
+| `AUTH_SECRET` | A random string you generate (step 3) |
 | `MAILGUN_API_KEY` | Mailgun → API key |
 | `MAILGUN_DOMAIN` | Mailgun → sandbox domain (`sandboxXXXX.mailgun.org`) |
 | `MAILGUN_FROM_EMAIL` | `Mia's Scent <postmaster@sandboxXXXX.mailgun.org>` |
@@ -17,22 +18,20 @@ You will end up with these values for `.env.local` (and for Vercel):
 
 ---
 
-## 1. Supabase (database + sign-in)
+## 1. Supabase (database)
 
-1. Go to <https://supabase.com>, sign in, and click **New project**. Pick a name
-   (`mias-scent`), set a database password (save it), choose the closest region, and click
-   **Create**. Wait for it to finish.
-2. Create the tables: in the left menu open **SQL Editor** → **New query**. Paste the whole
-   content of [`supabase/schema.sql`](../supabase/schema.sql), then click **Run**. You should
-   see "Success". **Table Editor** now shows `orders` and `order_items`.
-3. Copy the keys: open **Project Settings** (gear icon) → **API Keys** (and **Data API** for the URL).
-   - **Project URL** → `NEXT_PUBLIC_SUPABASE_URL`
-   - **anon public** key (or the new **publishable** key) → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - **service_role** key (or the new **secret** key) → `SUPABASE_SERVICE_ROLE_KEY`. Keep this one secret.
-4. Copy the Google callback URL: open **Authentication** → **Sign In / Providers** → **Google**.
-   Copy the **Callback URL (for OAuth)**. It looks like
-   `https://abcdefgh.supabase.co/auth/v1/callback`. Leave this tab open; you will paste the
-   Google keys here in step 2.
+1. Go to <https://supabase.com>, sign in, and click **New project**. Name it `mias-scent`,
+   set a **database password** (save it), choose the closest region, and click **Create**.
+2. Create the tables: open **SQL Editor** → **New query**. Paste the whole content of
+   [`supabase/schema.sql`](../supabase/schema.sql), then click **Run**. You should see "Success".
+3. Get the connection string: click the **Connect** button at the top of the dashboard →
+   **Connection String** tab → choose **Transaction pooler** (port **6543**) → copy the URI.
+   It looks like:
+   `postgresql://postgres.abcdefgh:[YOUR-PASSWORD]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres`
+   - Replace `[YOUR-PASSWORD]` (including the brackets) with your database password. This is `DATABASE_URL`.
+   - Use the **Transaction pooler**, not "Direct connection". The direct connection doesn't work from Vercel.
+   - If your password contains special characters like `@ # / ?`, either reset it to letters and
+     numbers only (Project Settings → Database → Reset password) or URL-encode those characters.
 
 ## 2. Google Cloud Console (Google sign-in)
 
@@ -42,38 +41,39 @@ You will end up with these values for `.env.local` (and for Vercel):
    - App name: `Mia's Scent`. User support email: your email.
    - Audience: **External**.
    - Contact email: your email. Agree and **Create**.
-3. Under **Audience** → **Test users**, add your email and your friend's email. While the
-   app is in "Testing" mode, only these accounts can sign in. If anyone should be able to
-   sign in (for example the HNG reviewers), click **Publish app** instead.
+3. Under **Audience**: while the app is in "Testing" mode, only the **Test users** you add can
+   sign in. Add your email and your friend's. If anyone should be able to sign in (for example
+   the HNG reviewers), click **Publish app**.
 4. Open **Clients** → **Create client**:
    - Application type: **Web application**. Name: `Mia's Scent web`.
-   - **Authorized JavaScript origins**: add `http://localhost:3000` (add your Vercel URL
-     later, step 5).
-   - **Authorized redirect URIs**: paste the **Supabase callback URL** from 1.4.
-   - Click **Create**, then copy the **Client ID** and **Client secret**.
-5. Back in Supabase **Authentication → Sign In / Providers → Google**: turn it **on**, paste
-   the Client ID and Client secret, and click **Save**.
-6. In Supabase **Authentication → URL Configuration**:
-   - **Site URL**: `http://localhost:3000` for now (change it to the Vercel URL in step 5).
-   - **Redirect URLs**: add `http://localhost:3000/**`.
+   - **Authorized JavaScript origins**: `http://localhost:3000`
+   - **Authorized redirect URIs**: `http://localhost:3000/auth/google/callback`
+   - Click **Create**, then copy the **Client ID** → `GOOGLE_CLIENT_ID` and the
+     **Client secret** → `GOOGLE_CLIENT_SECRET`.
+   - You will add the Vercel URLs in step 6.
 
-## 3. Mailgun (order confirmation emails)
+## 3. AUTH_SECRET (signs the login cookie)
+
+Run this once in a terminal and paste the output into `AUTH_SECRET`:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+## 4. Mailgun (order confirmation emails)
 
 1. Sign up at <https://www.mailgun.com> (the free plan is enough). Mailgun creates a
    **sandbox domain** like `sandbox1234abcd.mailgun.org`. Find it under **Send → Sending → Domains**.
    This is `MAILGUN_DOMAIN`.
 2. **Authorized recipients:** the sandbox can only send to addresses you approve. Open the
-   sandbox domain, click **Authorized recipients** (or the *Add recipient* box on the
-   overview page), and add your Google email and your friend's. Each person must click
-   **I agree** in the confirmation email Mailgun sends.
-3. **API key:** click your profile (top right) → **API Security** (or **API keys**) →
-   **Add new key**. Copy it into `MAILGUN_API_KEY`.
-4. `MAILGUN_FROM_EMAIL` = `Mia's Scent <postmaster@sandbox1234abcd.mailgun.org>` (use your
-   sandbox domain).
-5. If your account was created in the **EU** region (the dashboard URL contains `eu`), also set
-   `MAILGUN_API_BASE=https://api.eu.mailgun.net`.
+   sandbox domain → **Authorized recipients** and add your Google email and your friend's.
+   Each person must click **I agree** in the email Mailgun sends them.
+3. **API key:** profile menu (top right) → **API Security** (or **API keys**) → **Add new key**.
+   Copy it into `MAILGUN_API_KEY`.
+4. `MAILGUN_FROM_EMAIL` = `Mia's Scent <postmaster@sandbox1234abcd.mailgun.org>` (use your sandbox domain).
+5. If your account is in the **EU** region, also set `MAILGUN_API_BASE=https://api.eu.mailgun.net`.
 
-## 4. Run it locally
+## 5. Run it locally
 
 ```bash
 pnpm install
@@ -81,23 +81,23 @@ cp .env.example .env.local   # then open .env.local and fill in every value
 pnpm dev
 ```
 
-Open <http://localhost:3000> and test the flow in step 6.
+Open <http://localhost:3000> and test the flow in step 7.
 
-## 5. Deploy to Vercel
+## 6. Deploy to Vercel
 
 1. Go to <https://vercel.com/new> and import the `its-sona/mias-scent` GitHub repository.
 2. Before clicking Deploy, open **Environment Variables** and add **all** the variables from
-   `.env.local`. For now, set `NEXT_PUBLIC_SITE_URL` to the URL Vercel will give you, e.g.
+   `.env.local`. Set `NEXT_PUBLIC_SITE_URL` to the URL Vercel will give you, e.g.
    `https://mias-scent.vercel.app`.
 3. Click **Deploy** and note the final URL. If it differs from what you guessed, update
    `NEXT_PUBLIC_SITE_URL` in Vercel and **Redeploy**.
-4. Tell Supabase and Google about the live URL:
-   - Supabase **Authentication → URL Configuration**: set **Site URL** to your Vercel URL and
-     add `https://YOUR-APP.vercel.app/**` to **Redirect URLs** (keep the localhost one).
-   - Google Cloud **Clients → your client → Authorized JavaScript origins**: add
-     `https://YOUR-APP.vercel.app`. The redirect URI stays the Supabase one.
+4. Back in **Google Cloud Console → Clients → your client**, add:
+   - Authorized JavaScript origins: `https://YOUR-APP.vercel.app`
+   - Authorized redirect URIs: `https://YOUR-APP.vercel.app/auth/google/callback`
 
-## 6. Final test checklist (do this on the Vercel URL)
+   Save. It can take a few minutes for Google to apply the change.
+
+## 7. Final test checklist (do this on the Vercel URL)
 
 - [ ] Home page shows 10 products (5 essentials + 5 bundles) with ₦ prices.
 - [ ] Add items, change quantities, and refresh. The cart is still there.
@@ -109,13 +109,13 @@ Open <http://localhost:3000> and test the flow in step 6.
 
 ## Troubleshooting
 
-- **"redirect_uri_mismatch" from Google:** the redirect URI in Google must be exactly the
-  Supabase callback URL (`https://<ref>.supabase.co/auth/v1/callback`).
-- **After Google sign-in you land on localhost while on Vercel:** fix **Site URL** and
-  **Redirect URLs** in Supabase (step 5.4).
+- **Google "Error 400: redirect_uri_mismatch":** the redirect URI in Google must be exactly
+  `https://YOUR-APP.vercel.app/auth/google/callback` (or the localhost one). No trailing slash.
 - **"Access blocked: app is in testing":** add that Google account as a test user, or publish the app.
-- **Order saved but "couldn't send the confirmation email":** the recipient is not an
-  authorized recipient in the Mailgun sandbox, or the Mailgun variables are wrong or missing.
-  Check the Vercel **Logs** for the "Mailgun send failed" message.
-- **"We couldn't place your order":** check that `schema.sql` ran and that
-  `SUPABASE_SERVICE_ROLE_KEY` is set (Vercel → Logs shows the exact error).
+- **"We couldn't sign you in":** check `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+  `AUTH_SECRET` in Vercel. The Vercel **Logs** show "Google sign-in failed: …" with the reason.
+- **"We couldn't place your order" or orders don't load:** check `DATABASE_URL` (Transaction
+  pooler, port 6543, real password) and that `schema.sql` ran. The Vercel Logs show the exact error.
+- **Order saved but "couldn't send the confirmation email":** the recipient isn't an authorized
+  recipient in the Mailgun sandbox, or the Mailgun variables are wrong. Look for
+  "Mailgun send failed" in the Vercel Logs.

@@ -1,14 +1,9 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
+import { getUser } from "@/lib/session";
 import { CartLink } from "@/components/cart-link";
 
 export async function Header() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const displayName = user?.user_metadata?.full_name ?? user?.email;
+  const user = await getUser();
 
   return (
     <header className="sticky top-0 z-20 border-b border-blush/60 bg-cream/90 backdrop-blur">
@@ -30,7 +25,7 @@ export async function Header() {
           {user ? (
             <div className="flex items-center gap-3">
               <span className="hidden max-w-40 truncate text-taupe md:inline" title={user.email}>
-                {displayName}
+                {user.name}
               </span>
               <form action="/auth/signout" method="post">
                 <button

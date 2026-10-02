@@ -1,10 +1,32 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
+import { getUser } from "@/lib/session";
 import { formatDate, formatNaira, orderNumber } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Order details — Mia's Scent" };
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type Order = {
+  id: string;
+  created_at: Date;
+  customer_name: string;
+  phone: string;
+  address: string;
+  email: string;
+  total: number;
+  email_status: "pending" | "sent" | "failed";
+};
+
+type OrderItem = {
+  id: string;
+  product_name: string;
+  unit_price: number;
+  quantity: number;
+  line_total: number;
+};
 
 export default async function OrderPage({
   params,
@@ -16,22 +38,24 @@ export default async function OrderPage({
   const { id } = await params;
   const { placed } = await searchParams;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getUser();
   if (!user) redirect(`/login?next=/orders/${encodeURIComponent(id)}`);
+  if (!UUID_PATTERN.test(id)) notFound();
 
-  // RLS returns nothing if this order belongs to someone else.
-  const { data: order } = await supabase
-    .from("orders")
-    .select(
-      "id, created_at, customer_name, phone, address, email, total, email_status, order_items(id, product_name, unit_price, quantity, line_total)",
-    )
-    .eq("id", id)
-    .maybeSingle();
-
+  // Matching on user_id means nobody can open someone else's order.
+  const [order] = await sql<Order[]>`
+    select id, created_at, customer_name, phone, address, email, total, email_status
+    from orders
+    where id = ${id} and user_id = ${user.sub}
+  `;
   if (!order) notFound();
+
+  const items = await sql<OrderItem[]>`
+    select id, product_name, unit_price, quantity, line_total
+    from order_items
+    where order_id = ${order.id}
+    order by id
+  `;
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6">
@@ -60,7 +84,7 @@ export default async function OrderPage({
       <section className="mt-8 rounded-2xl bg-white p-6 ring-1 ring-blush/50">
         <h2 className="font-serif text-2xl">Items</h2>
         <ul className="mt-4 space-y-3 text-sm">
-          {order.order_items.map((item) => (
+          {items.map((item) => (
             <li key={item.id} className="flex justify-between gap-4">
               <span>
                 {item.product_name} × {item.quantity}{" "}

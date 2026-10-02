@@ -1,23 +1,34 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
+import { getUser } from "@/lib/session";
 import { formatDate, formatNaira, orderNumber } from "@/lib/format";
 
 export const metadata: Metadata = { title: "My orders — Mia's Scent" };
 
+type OrderSummary = { id: string; created_at: Date; total: number; item_count: number };
+
 export default async function OrdersPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getUser();
   if (!user) redirect("/login?next=/orders");
 
-  // Row Level Security makes sure only this user's orders come back.
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id, created_at, total, order_items(quantity)")
-    .order("created_at", { ascending: false });
+  // Only this user's orders, newest first.
+  let orders: readonly OrderSummary[] | null = null;
+  let error = false;
+  try {
+    orders = await sql<OrderSummary[]>`
+      select o.id, o.created_at, o.total, coalesce(sum(i.quantity), 0)::int as item_count
+      from orders o
+      left join order_items i on i.order_id = o.id
+      where o.user_id = ${user.sub}
+      group by o.id
+      order by o.created_at desc
+    `;
+  } catch (cause) {
+    console.error("Loading orders failed:", cause);
+    error = true;
+  }
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6">
@@ -44,7 +55,7 @@ export default async function OrdersPage() {
       {orders && orders.length > 0 && (
         <ul className="mt-8 divide-y divide-blush/60 rounded-2xl bg-white ring-1 ring-blush/50">
           {orders.map((order) => {
-            const count = order.order_items.reduce((sum, item) => sum + item.quantity, 0);
+            const count = order.item_count;
             return (
               <li key={order.id}>
                 <Link

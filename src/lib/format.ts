@@ -8,7 +8,7 @@ export function formatNaira(amount: number): string {
   return naira.format(amount);
 }
 
-export function formatDate(value: string): string {
+export function formatDate(value: Date | string): string {
   return new Intl.DateTimeFormat("en-NG", {
     dateStyle: "medium",
     timeStyle: "short",

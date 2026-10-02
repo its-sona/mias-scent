@@ -2,7 +2,7 @@ import { formatDate, formatNaira, orderNumber } from "@/lib/format";
 
 export type ReceiptOrder = {
   id: string;
-  created_at: string;
+  created_at: Date | string;
   customer_name: string;
   phone: string;
   address: string;

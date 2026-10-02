@@ -28,8 +28,8 @@ Before starting a task or implementation phase:
 ## Locked technology stack
 
 - Next.js with React and the **App Router**, including server-side/API route functionality where appropriate.
-- Supabase PostgreSQL for persistent order data and Supabase Auth for Google OAuth integration.
-- Google OAuth 2.0 configured by the user through Google Cloud Console and Supabase.
+- Supabase PostgreSQL for persistent order data, accessed directly from the server with a connection string (`DATABASE_URL`, transaction pooler) via the `postgres` driver. Supabase Auth is **not** used.
+- Google OAuth 2.0 implemented directly in the app with the user's own Google Cloud Console client ID/secret (authorization code flow with state + PKCE) and an HMAC-signed, HTTP-only session cookie (`AUTH_SECRET`).
 - Mailgun REST API using a sandbox domain for development email.
 - Vercel for deployment.
 - Do not replace these choices or add libraries/services without a clear requirement and an explanation of the trade-off.
@@ -38,8 +38,8 @@ Before starting a task or implementation phase:
 
 - Keep the solution simple and appropriate for a beginner-maintained project.
 - Treat browser input as untrusted. Verify the signed-in identity on the server, validate checkout fields, and calculate totals from trusted catalog data on the server. Never trust client-submitted prices or totals.
-- Enforce user-scoped order access in Supabase (including Row Level Security policies where appropriate). A customer must not be able to read or alter another customer's order.
-- Keep Supabase service-role credentials, Mailgun API keys, OAuth secrets, and other private values on the server in environment variables. Never expose them to client bundles or commit them.
+- Enforce user-scoped order access: every order query filters by the signed-in user's Google ID. RLS is enabled with no policies so the tables are not reachable through Supabase's public REST API. A customer must not be able to read or alter another customer's order.
+- Keep the database connection string, Mailgun API keys, OAuth secrets, the session secret, and other private values on the server in environment variables. Never expose them to client bundles or commit them.
 - Provide an `.env.example` containing variable names and safe placeholders only; do not put real credentials in it.
 - Save the order before sending its email. Email delivery failure must not delete or undo a successfully saved order; report the email failure clearly and safely.
 - Handle duplicate checkout submissions safely to avoid accidental duplicate orders where practical.

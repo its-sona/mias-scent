@@ -2,7 +2,8 @@
 
 import { getProduct, MAX_QUANTITY } from "@/lib/catalog";
 import { sendOrderConfirmation } from "@/lib/mailgun";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
+import { getUser } from "@/lib/session";
 
 export type CheckoutState = {
   error?: string;
@@ -53,11 +54,8 @@ export async function placeOrder(
   formData: FormData,
 ): Promise<CheckoutState> {
   // 1. Confirm who is signed in, on the server.
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user?.email) {
+  const user = await getUser();
+  if (!user) {
     return { error: "Your session has expired. Please sign in again." };
   }
 
@@ -81,58 +79,45 @@ export async function placeOrder(
   const requestId = String(formData.get("requestId") ?? "");
   if (!UUID_PATTERN.test(requestId)) return { error: "Something went wrong. Please try again." };
 
-  const admin = createAdminClient();
-
-  // 4. If this exact checkout was already submitted (double click / retry), reuse it.
-  const { data: existing } = await admin
-    .from("orders")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("client_request_id", requestId)
-    .maybeSingle();
-  if (existing) return { orderId: existing.id };
-
-  // 5. Save the order, then its line items.
-  const { data: order, error: orderError } = await admin
-    .from("orders")
-    .insert({
-      user_id: user.id,
-      client_request_id: requestId,
-      customer_name: name,
-      phone,
-      address,
-      email: user.email,
-      total,
-    })
-    .select("id, created_at")
-    .single();
-
-  if (orderError || !order) {
-    // 23505 = unique violation: a parallel submit already created this order.
-    if (orderError?.code === "23505") {
-      const { data: duplicate } = await admin
-        .from("orders")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("client_request_id", requestId)
-        .single();
-      if (duplicate) return { orderId: duplicate.id };
-    }
-    console.error("Order insert failed:", orderError);
+  // 4. Save the order and its items together in one transaction. If this exact
+  //    checkout was already submitted (double click / retry), reuse that order.
+  let order: { id: string; created_at: Date; isNew: boolean };
+  try {
+    order = await sql.begin(async (tx) => {
+      const [created] = await tx<{ id: string; created_at: Date }[]>`
+        insert into orders (user_id, client_request_id, customer_name, phone, address, email, total)
+        values (${user.sub}, ${requestId}, ${name}, ${phone}, ${address}, ${user.email}, ${total})
+        on conflict (user_id, client_request_id) do nothing
+        returning id, created_at
+      `;
+      if (!created) {
+        const [existing] = await tx<{ id: string; created_at: Date }[]>`
+          select id, created_at from orders
+          where user_id = ${user.sub} and client_request_id = ${requestId}
+        `;
+        return { ...existing, isNew: false };
+      }
+      await tx`
+        insert into order_items ${tx(
+          items.map((item) => ({ ...item, order_id: created.id })),
+          "order_id",
+          "product_id",
+          "product_name",
+          "unit_price",
+          "quantity",
+          "line_total",
+        )}
+      `;
+      return { ...created, isNew: true };
+    });
+  } catch (error) {
+    console.error("Saving order failed:", error);
     return { error: "We couldn't place your order. Please try again." };
   }
 
-  const { error: itemsError } = await admin
-    .from("order_items")
-    .insert(items.map((item) => ({ ...item, order_id: order.id })));
+  if (!order.isNew) return { orderId: order.id };
 
-  if (itemsError) {
-    console.error("Order items insert failed:", itemsError);
-    await admin.from("orders").delete().eq("id", order.id);
-    return { error: "We couldn't place your order. Please try again." };
-  }
-
-  // 6. The order is saved. Now send the email; a failure here does not undo the order.
+  // 5. The order is saved. Now send the email; a failure here does not undo the order.
   const sent = await sendOrderConfirmation({
     id: order.id,
     created_at: order.created_at,
@@ -143,10 +128,11 @@ export async function placeOrder(
     total,
     items,
   });
-  await admin
-    .from("orders")
-    .update({ email_status: sent ? "sent" : "failed" })
-    .eq("id", order.id);
+  try {
+    await sql`update orders set email_status = ${sent ? "sent" : "failed"} where id = ${order.id}`;
+  } catch (error) {
+    console.error("Updating email status failed:", error);
+  }
 
   return { orderId: order.id };
 }
